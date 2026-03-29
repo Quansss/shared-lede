@@ -1,34 +1,41 @@
-name: Build CR6606
+name: Build CR6606 Final
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 强制Node24，消除所有警告
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt update && sudo apt install build-essential -y
+        run: sudo apt update && sudo apt install build-essential libncurses-dev bison flex libssl-dev libelf-dev python3 -y
 
-      - name: Clone source
-        run: git clone https://github.com/coolsnowwolf/lede --depth 1
+      - name: Clone LEDE
+        run: git clone https://github.com/coolsnowwolf/lede lede --depth 1
 
-      - name: Build config
+      - name: Create config
         run: |
           cd lede
-          echo -e "CONFIG_TARGET_ramips=y\nCONFIG_TARGET_ramips_mt7621=y\nCONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6606=y" > .config
+          cat > .config << EOF
+          CONFIG_TARGET_ramips=y
+          CONFIG_TARGET_ramips_mt7621=y
+          CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6606=y
+          CONFIG_DEFAULT_CONNECTION_KEEPALIVE=y
+          EOF
           make defconfig
 
       - name: Download
         run: cd lede && make download -j8
 
       - name: Compile
-        run: cd lede && make -j4 V=s
+        run: cd lede && make -j4
 
-      - name: Upload
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: firmware
+          name: cr6606-firmware
           path: lede/bin/targets/ramips/mt7621/*
