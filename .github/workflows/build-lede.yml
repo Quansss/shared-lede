@@ -5,7 +5,7 @@
 #
 # <https://github.com/hugcabbage/shared-lede>
 #
-# The firmware code comes from coolsnowwolf/lede
+# The firmware code comes from coolsnowwolf lede
 #
 name: build lede
 
@@ -20,28 +20,56 @@ on:
           - 'xiaomi-cr6606'
           - 'xiaomi-4a-gigabit'
           - 'redmi-ax6s'
-          # 其他机型保留...
+          - 'qihoo-c301'
+          - 'phicomm-k3'
+          - 'tenda-ac9'
+          - 'xiaomi-ax3600'
+          - 'xiaomi-ax9000'
+          - 'h3c-magic-nx30-pro'
+          - 'qihoo-360t7'
+          - 'xiaomi-ax3000t'
+          - 'xiaomi-wr30u'
+          - 'redmi-ax6000'
+          - 'miwifi-mini'
+          - 'miwifi-r3'
+          - 'glinet-mt1300'
+          - 'hiwifi-hc5962'
+          - 'phicomm-k2p'
+          - 'xiaomi-3g'
+          - 'xiaomi-3g-v2'
+          - 'xiaomi-3-pro'
+          - 'xiaomi-4'
+          - 'xiaomi-ac2100'
+          - 'xiaomi-cr6608'
+          - 'xiaomi-cr6609'
+          - 'redmi-ac2100'
+          - 'youhua-wr1200js'
+          - 'glinet-mt300n-v2'
+          - 'glinet-microuter-n300'
+          - 'xiaomi-4a-100m'
+          - 'xiaomi-4c'
+          - 'miwifi-nano'
       lan_ipad:
-        description: '设置LAN口IP地址'
+        description: '设置LAN口IP地址(会覆盖modify脚本中的设置)'
         required: false
         default: ''
         type: string
       login_pwd:
-        description: '设置初始登陆密码'
+        description: '设置初始登陆密码(会覆盖modify脚本中的设置)'
         required: false
         default: ''
         type: string
       record:
         description: '输入版本描述'
         required: false
-        default: 'CR6606 定制固件 SSR+/PassWall2/FRPC'
+        default: 'CR6606 固件 - 集成SSRPlus+PassWall2+FRPC'
         type: string
       cpu_overclock:
         description: '超频到1100Mhz'
         required: false
         type: boolean
       kernel_5_15:
-        description: '使用5.15内核'
+        description: '使用5.15内核(超频勿选此项)'
         required: false
         type: boolean
       release:
@@ -58,114 +86,172 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  to-build:
+    name: build
     runs-on: ubuntu-latest
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # 强制使用 Node.js 24 解决弃用问题
+      EXTRA_STR: _some
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: 显示初始磁盘空间
-        run: df -h
 
-      - name: 检出代码仓库
+      - name: Hide sensitive inputs
+        if: github.event_name == 'workflow_dispatch'
+        uses: hugcabbage/action-hide-sensitive-inputs@v1
+        with:
+          include_inputs: login_pwd
+
+      - name: Display initial disk space
+        run: |
+          df -h
+
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          path: ${{ env.EXTRA_STR }}
 
-      - name: 准备编译环境
+      - name: Prepare environments
+        env:
+          REQUIREMENTS: ${{ env.EXTRA_STR }}/extra-files/requirements-transit.txt
         run: |
-          sudo apt update
-          sudo apt install -y build-essential libncurses-dev gawk flex bison quilt libssl-dev libelf-dev python3 python3-pip unzip git wget rsync
-          pip3 install pyyaml toml
+          sudo apt-get update
+          sudo apt-get -y install gcc-multilib gettext
+          sudo apt-get clean
+          pip3 install -r $REQUIREMENTS
 
-      - name: 准备部署配置
-        id: prepare
-        run: |
-          chmod +x extra-files/transit.py
-          python3 extra-files/transit.py
+      - name: Prepare deployment
+        id: prepare-deployment
         env:
           MODEL_NAME: ${{ inputs.model }}
           LOGIN_IP: ${{ inputs.lan_ipad }}
           LOGIN_PWD: ${{ inputs.login_pwd }}
-
-      - name: 克隆 OpenWrt 源码
+          TEMP_PREFIX: ${{ env.EXTRA_STR }}
+          DEPLOY_DIR: ${{ env.EXTRA_STR }}/preset-lede
+          TRANSIT_PY: ${{ env.EXTRA_STR }}/extra-files/transit.py
         run: |
-          chmod +x ${{ steps.prepare.outputs.clone_sh }}
-          ${{ steps.prepare.outputs.clone_sh }}
+          chmod +x $TRANSIT_PY
+          $TRANSIT_PY
 
-      - name: 添加插件 (SSRPlus & PassWall2)
+      - name: Clone sources
+        env:
+          CLONE_SH: ${{ steps.prepare-deployment.outputs.clone_sh }}
         run: |
-          cd lede
+          chmod +x $CLONE_SH
+          $CLONE_SH
+
+      # ==================== 关键修改：只在这里加插件 ====================
+      - name: Add Plugins (SSRPlus / PassWall2 / FRPC)
+        run: |
+          cd $GITHUB_WORKSPACE/${{ env.EXTRA_STR }}/lede
           git clone https://github.com/fw876/helloworld.git package/helloworld
           git clone https://github.com/xiaorouji/openwrt-passwall2.git package/passwall2
 
-      - name: 更新 feeds
+      - name: Update feeds
         run: |
-          cd lede
+          cd $GITHUB_WORKSPACE/${{ env.EXTRA_STR }}/lede
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 修改配置文件
-        run: |
-          cd lede
-          chmod +x ${{ steps.prepare.outputs.modify_sh }}
-          ${{ steps.prepare.outputs.modify_sh }}
+      - name: Modify configuration
         env:
+          MODIFY_SH: ${{ steps.prepare-deployment.outputs.modify_sh }}
           CPUO: ${{ inputs.cpu_overclock }}
           K515: ${{ inputs.kernel_5_15 }}
-
-      - name: 生成 .config 并启用插件
         run: |
-          cd lede
-          mv ${{ steps.prepare.outputs.dot_config }} .config
+          cd $GITHUB_WORKSPACE/${{ env.EXTRA_STR }}/lede
+          $CPUO && ! $K515 && sed -i '/fix-cpu-clk-add-clkdev/ s/#//' $MODIFY_SH
+          $K515 && sed -i '/KERNEL_PATCHVER:=5.15/ s/#//' $MODIFY_SH
+          chmod +x $MODIFY_SH
+          $MODIFY_SH
+
+      - name: Generate .config & Enable Plugins
+        env:
+          DOT_CONFIG: ${{ steps.prepare-deployment.outputs.dot_config }}
+        run: |
+          cd $GITHUB_WORKSPACE/${{ env.EXTRA_STR }}/lede
+          mv $DOT_CONFIG .config
           
-          # 启用你需要的插件
+          # 启用插件
           echo "CONFIG_PACKAGE_luci-app-ssr-plus=y" >> .config
           echo "CONFIG_PACKAGE_luci-app-passwall2=y" >> .config
           echo "CONFIG_PACKAGE_luci-app-frpc=y" >> .config
           
-          # 精简无用插件
+          # 精简无用包
           echo "CONFIG_PACKAGE_luci-app-qbittorrent is not set" >> .config
           echo "CONFIG_PACKAGE_luci-app-transmission is not set" >> .config
           echo "CONFIG_PACKAGE_luci-app-zerotier is not set" >> .config
-          echo "CONFIG_PACKAGE_luci-app-hd-idle is not set" >> .config
-          
+          echo "CONFIG_PACKAGE_luci-app-diskman is not set" >> .config
+
           make defconfig
 
-      - name: 下载源码依赖
+      - name: Make download
         run: |
-          cd lede
+          cd $GITHUB_WORKSPACE/${{ env.EXTRA_STR }}/lede
           make download -j8 || make download -j1 V=s
 
-      - name: 开始编译
+      - name: Compile
         run: |
-          cd lede
+          cd $GITHUB_WORKSPACE/${{ env.EXTRA_STR }}/lede
           make -j$(nproc) || make -j1 V=s
 
-      - name: 收集固件文件
+      - name: Pick up files
         run: |
-          cd lede
-          mkdir -p _collected
-          cp $(find bin/targets/ -name "*${{ inputs.model }}*.bin") _collected/
-          cp $(find bin/targets/ -name "*${{ inputs.model }}*.img.gz") _collected/
-          cd _collected
-          zip -r firmware_${{ inputs.model }}.zip *
+          cd $GITHUB_WORKSPACE/${{ env.EXTRA_STR }}/lede
+          mkdir -p _collected_firmware/packages
+          rm -rf $(find bin/targets/ -type d -name 'packages')
+          cp $(find bin/targets/ -type f) _collected_firmware
+          cp $(find bin/packages/ -type f -name '*.ipk') _collected_firmware/packages
+          cd _collected_firmware
+          zip -r allfiles.zip *
+          cd packages
+          zip -r ../packages.zip *
 
-      - name: 上传固件到 Release
-        if: ${{ inputs.release }}
-        uses: softprops/action-gh-release@v2
+      - name: Generate summary
+        continue-on-error: true
+        id: generate-summary
+        env:
+          FOR_DEVICE: ${{ steps.prepare-deployment.outputs.fordevice }}
+          CODE_DIR: ${{ steps.prepare-deployment.outputs.codedir }}
+          TRANSIT_PY: ${{ env.EXTRA_STR }}/extra-files/transit.py
+        run: |
+          chmod +x $TRANSIT_PY
+          $TRANSIT_PY
+
+      - name: Calculate tag version
+        id: calculate-version
+        if: inputs.release
+        uses: hugcabbage/next-version@v1
         with:
-          files: lede/_collected/firmware_${{ inputs.model }}.zip
-          tag_name: "build-${{ github.sha }}"
-          name: "CR6606 Custom Build ${{ github.sha }}"
+          repo_path: ${{ env.EXTRA_STR }}
+
+      - name: Upload firmware to release
+        id: to-release
+        if: steps.calculate-version.conclusion == 'success' && inputs.release
+        continue-on-error: true
+        uses: svenstaro/upload-release-action@v2
+        with:
+          file: ${{ env.EXTRA_STR }}/lede/_collected_firmware/*
+          tag: ${{ steps.calculate-version.outputs.version }}
+          release_name: ${{ steps.calculate-version.outputs.version }} ${{ steps.generate-summary.outputs.stitle }}
+          overwrite: true
+          prerelease: false
           body: |
             ${{ inputs.record }}
-            - 设备: ${{ inputs.model }}
-            - 内核: ${{ inputs.kernel_5_15 && '5.15' || '默认' }}
-            - 功能: SSRPlus / PassWall2 / FRPC
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            ✅ 已集成：SSRPlus、PassWall2、FRPC
+            ✅ 已精简：无用插件，节省空间
+            ${{ steps.generate-summary.outputs.summary }}
+          file_glob: true
 
-      - name: 上传固件到 Artifact
-        if: ${{ inputs.artifact }}
+      - name: Upload firmware to artifact
+        if: inputs.artifact || steps.to-release.outcome != 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.model }}-firmware
-          path: lede/_collected/
+          name: collected_firmware
+          path: |
+            ${{ env.EXTRA_STR }}/lede/_collected_firmware/
+            !${{ env.EXTRA_STR }}/lede/_collected_firmware/*.zip
+
+      - name: Display finishing disk space
+        run: |
+          df -h
+          echo "----------------------------"
+          du -h --max-depth=1
