@@ -1,62 +1,34 @@
-name: Build CR6606 OpenWrt
+name: Build CR6606
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev python3
+        run: sudo apt update && sudo apt install build-essential -y
 
-      # 🔥 用 Gitee 镜像，彻底解决 git clone 失败（code 128）
-      - name: Clone LEDE (Gitee 国内加速)
-        run: git clone https://gitee.com/coolsnowwolf/lede.git lede
+      - name: Clone source
+        run: git clone https://github.com/coolsnowwolf/lede --depth 1
 
-      - name: Add plugins (Gitee 加速)
+      - name: Build config
         run: |
           cd lede
-          git clone https://gitee.com/mirrors/helloworld.git package/helloworld
-          git clone https://gitee.com/mirrors/passwall2.git package/passwall2
-
-      - name: Update feeds
-        run: |
-          cd lede
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      - name: Config CR6606
-        run: |
-          cd lede
-          cat > .config << EOF
-          CONFIG_TARGET_ramips=y
-          CONFIG_TARGET_ramips_mt7621=y
-          CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6606=y
-          CONFIG_PACKAGE_luci-app-ssr-plus=y
-          CONFIG_PACKAGE_luci-app-passwall2=y
-          CONFIG_PACKAGE_luci-app-frpc=y
-          CONFIG_PACKAGE_luci-app-qbittorrent is not set
-          CONFIG_PACKAGE_luci-app-transmission is not set
-          CONFIG_PACKAGE_luci-app-zerotier is not set
-          CONFIG_PACKAGE_luci-app-diskman is not set
-          EOF
+          echo -e "CONFIG_TARGET_ramips=y\nCONFIG_TARGET_ramips_mt7621=y\nCONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-cr6606=y" > .config
           make defconfig
 
       - name: Download
         run: cd lede && make download -j8
 
       - name: Compile
-        run: cd lede && make -j$(nproc)
+        run: cd lede && make -j4 V=s
 
-      - name: Upload firmware
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: cr6606-firmware
+          name: firmware
           path: lede/bin/targets/ramips/mt7621/*
